@@ -140,7 +140,7 @@ struct ConsoleApp {
     oc_session: Option<String>,
     /// 生成開始時刻（経過秒の表示用）
     chat_started: Option<Instant>,
-    /// IME の変換（未確定文字列）が進行中かどうか。変換中は Tab を egui に渡さない。
+    /// IME の変換（未確定文字列）が進行中かどうか。変換中は Tab と Enter を egui に渡さない。
     ime_composing: bool,
     status: ServerStatus,
     status_rx: mpsc::Receiver<(ServerStatus, Vec<String>)>,
@@ -291,7 +291,7 @@ impl ConsoleApp {
                 .desired_width(f32::INFINITY)
                 // Tab でフォーカスを手放さない（IME変換中にフォーカスが外れると変換が消えるため）
                 .lock_focus(true)
-                .hint_text("メッセージを入力（Ctrl+Enterで送信）"),
+                .hint_text("メッセージを入力"),
         );
         ui.horizontal(|ui| {
             if matches!(self.status, ServerStatus::Stopped) && self.starting_since.is_none() {
@@ -309,6 +309,8 @@ impl ConsoleApp {
                 if ui.add_enabled(can_send, egui::Button::new("送信")).clicked() {
                     self.send_chat();
                 }
+                // 送信ボタンと並べて常時表示する（入力欄のヒント文は打ち始めると消えるため）
+                ui.label("Ctrl+Enterで送信");
             });
         });
         let ctrl_enter = input_resp.has_focus()
@@ -418,12 +420,16 @@ impl ConsoleApp {
 
 impl eframe::App for ConsoleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // IME変換中は Tab キーを egui に渡さない。
+        // IME変換中は Tab と Enter を egui に渡さない。
         // MS-IME の予測変換は Tab で候補を選ぶが、egui の TextEdit は Tab を
         // タブ文字の挿入として先に処理してしまい、変換が確定できないため。
+        // 同様に、変換の確定に使う Enter も TextEdit が改行として処理してしまう。
         // （フォーカス移動は入力欄の lock_focus(true) 側で止めている）
         {
-            let mut composing = self.ime_composing;
+            // 確定（Commit）が Enter と同じフレームで届くと composing が先に
+            // false へ倒れて Enter が漏れるため、前フレームの状態でも止める。
+            let was_composing = self.ime_composing;
+            let mut composing = was_composing;
             ctx.input(|i| {
                 for e in &i.events {
                     if let egui::Event::Ime(ie) = e {
@@ -437,10 +443,17 @@ impl eframe::App for ConsoleApp {
                 }
             });
             self.ime_composing = composing;
-            if composing {
+            if was_composing || composing {
                 ctx.input_mut(|i| {
-                    i.events
-                        .retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Tab, .. }));
+                    i.events.retain(|e| {
+                        !matches!(
+                            e,
+                            egui::Event::Key {
+                                key: egui::Key::Tab | egui::Key::Enter,
+                                ..
+                            }
+                        )
+                    });
                 });
             }
         }
