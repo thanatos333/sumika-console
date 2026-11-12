@@ -71,30 +71,11 @@ impl Settings {
     }
 }
 
-/// 初回起動時、Strata の起動設定（iq3_xxs-128k.json）の user_args を
-/// 追加引数の初期値として読み込む（制御ベクトル設定などの引き継ぎ用）。
-/// user_args が文字列ならそのまま、配列なら空白区切りで連結する。
+/// 追加引数の初期値。以前は起動プロファイル（iq3_xxs-128k.json）の user_args を
+/// 引き継いでいたが、あれはエンジン（llama-server層）への引数であり、
+/// `strata launch` のオプションではないため、末尾に付けると起動が即失敗する
+/// （2026-11-13 実測）。user_args はプロファイル側に保存されていて起動時に
+/// 自動で適用されるので、こちらは空欄が正しい。
 pub fn seed_extra_args() -> String {
-    let Ok(local) = std::env::var("LOCALAPPDATA") else {
-        return String::new();
-    };
-    let path = PathBuf::from(local)
-        .join("Strata")
-        .join("launch")
-        .join("iq3_xxs-128k.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return String::new();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return String::new();
-    };
-    match v.get("user_args") {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(serde_json::Value::Array(arr)) => arr
-            .iter()
-            .filter_map(|x| x.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        _ => String::new(),
-    }
+    String::new()
 }

@@ -9,7 +9,7 @@
 
 ## 重要な前提
 - Strata: `%LOCALAPPDATA%\Strata\terminal\current\bin\strata.cmd`（.cmd なので起動は `cmd /C` 経由）
-- サーバー: `http://127.0.0.1:<port>`（既定 8080）、OpenAI 互換 API（GET /v1/models、POST /v1/chat/completions）
+- サーバー: `http://127.0.0.1:<port>`（既定 8080）、OpenAI 互換 API（GET /v1/models は状態監視専用。チャットは v0.2.0 から OpenCode 経由＝次項）
 - **日本語フォント必須**: egui 標準フォントには CJK が無い。起動時に `C:\Windows\Fonts\YuGothM.ttc`（無ければ `meiryob.ttc`、`msgothic.ttc` の順に探す）を読み込み、FontDefinitions の Proportional/Monospace の末尾にフォールバックとして追加すること。
 
 ## 画面構成（1ウィンドウ、タブ切替）
@@ -18,12 +18,13 @@
 - 「起動」「終了」ボタン（状態に応じて活性/非活性）
 - 状態は数秒ごとにポーリングして自動更新
 
-### 「チャット」タブ
-- システムプロンプト欄（編集可、設定に保存）。既定値: 「あなたは「すみか」です。あつやさんのPCに住むローカルAIとして、丁寧で役立つ回答を日本語でしてください。」
+### 「チャット」タブ（v0.2.0 で方式変更）
+- チャットは彼女の本体（OpenCode）経由で送る：`opencode run --auto --format json --model strata/<起動中モデル id>` を作業フォルダ `D:\strata-work\friend` で実行し、憲章・記憶・道具を持った本人と会話する。OPENCODE_CONFIG には exe の隣に生成する `opencode-config.json`（strata プロバイダ＋モデル定義）を指定する
+- 会話の継続は OpenCode のセッション（`--session`）を引き継ぐ。「新しい会話」ボタンで履歴とセッションをリセットする
 - 会話履歴（スクロール表示、ユーザー/アシスタントを区別）
-- 入力欄（複数行）＋「送信」ボタン。送信中は「生成中…」表示
-- POST /v1/chat/completions（非ストリーミング、model は /v1/models の先頭 id、temperature 0.7）
-- HTTP はワーカースレッド＋ mpsc チャネルで実行し、UI をブロックしない
+- 入力欄（複数行、lock_focus）＋「送信」ボタン（Ctrl+Enter でも送信）。送信中は「生成中…（経過秒）」表示。初回は本体側の文脈読み込みで数分かかることがある
+- IME 変換中は Tab キーを egui に渡さない（MS-IME の予測変換が Tab を使うため。egui 0.29 の TextEdit は Tab をタブ文字挿入として処理し、変換を壊す）
+- 実行はワーカースレッド＋ mpsc チャネルで UI をブロックしない。制限時間 30 分
 
 ### 「設定」タブ
 - family: ドロップダウン（qwen / qwen36）
@@ -32,7 +33,7 @@
 - vision: ドロップダウン（off / on / gpu / cpu）
 - parallel: 数値（1〜8）
 - port: 数値（既定 8080）
-- 追加引数: 複数行テキスト。**初回起動時**に `%LOCALAPPDATA%\Strata\launch\iq3_xxs-128k.json` の `user_args` があれば、その内容を初期値として読み込む（制御ベクトル等の引き継ぎ）
+- 追加引数: 複数行テキスト。`strata launch` のオプションとして末尾に付与される。通常は空欄。**起動プロファイルの `user_args` はエンジン層の引数であり、ここへ入れてはいけない**（入れると launch が即失敗する。user_args はプロファイル側に保存され起動時に自動適用される）
 - 設定は exe と同じフォルダの `settings.json` に保存・読込（「保存」ボタン＋起動時に自動読込）
 
 ## 起動/終了の実装

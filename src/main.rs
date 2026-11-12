@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod api;
+mod opencode;
 mod settings;
 mod strata;
 
@@ -134,7 +135,13 @@ struct ConsoleApp {
     messages: Vec<ChatMsg>,
     input: String,
     generating: bool,
-    chat_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    chat_rx: Option<mpsc::Receiver<Result<(String, Option<String>), String>>>,
+    /// OpenCode 側の会話セッション（継続用）。新しい会話で None に戻す。
+    oc_session: Option<String>,
+    /// 生成開始時刻（経過秒の表示用）
+    chat_started: Option<Instant>,
+    /// IME の変換（未確定文字列）が進行中かどうか。変換中は Tab を egui に渡さない。
+    ime_composing: bool,
     status: ServerStatus,
     status_rx: mpsc::Receiver<(ServerStatus, Vec<String>)>,
     port_shared: Arc<Mutex<u16>>,
@@ -176,6 +183,9 @@ impl ConsoleApp {
             input: String::new(),
             generating: false,
             chat_rx: None,
+            oc_session: None,
+            chat_started: None,
+            ime_composing: false,
             status: ServerStatus::Stopped,
             status_rx: rx,
             port_shared,
@@ -209,37 +219,34 @@ impl ConsoleApp {
         self.input.clear();
         self.messages.push(ChatMsg {
             role: "user".to_string(),
-            content: text,
+            content: text.clone(),
         });
-        let mut convo: Vec<ChatMsg> = Vec::new();
-        if !self.settings.system_prompt.trim().is_empty() {
-            convo.push(ChatMsg {
-                role: "system".to_string(),
-                content: self.settings.system_prompt.clone(),
-            });
-        }
-        convo.extend(self.messages.iter().cloned());
+        // チャットは彼女の本体（OpenCode）経由で送る。人格・記憶・道具は
+        // 本体側（憲章）で定義されるため、ここでは会話履歴を再送しない。
+        // 継続は OpenCode のセッションを引き継ぐことで行う。
         let port = self.settings.port;
+        let session = self.oc_session.clone();
         let (tx, rx) = mpsc::channel();
         self.chat_rx = Some(rx);
         self.generating = true;
+        self.chat_started = Some(Instant::now());
         std::thread::spawn(move || {
-            let r = api::chat_completion(port, &model, &convo);
+            let r = opencode::run_chat(&model, port, &session, &text);
             let _ = tx.send(r);
         });
     }
 
-    fn chat_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("システムプロンプト");
-        let prompt_resp = ui.add(
-            egui::TextEdit::multiline(&mut self.settings.system_prompt)
-                .desired_rows(2)
-                .desired_width(f32::INFINITY),
-        );
-        if prompt_resp.changed() {
-            // システムプロンプトは編集したらその場で設定に保存する
-            let _ = self.settings.save(&self.settings_path);
+    fn new_conversation(&mut self) {
+        if self.generating {
+            return;
         }
+        self.messages.clear();
+        self.oc_session = None;
+        self.notice = "新しい会話を始めました。".to_string();
+    }
+
+    fn chat_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label("チャットは彼女の本体（OpenCode）経由です。人格・記憶・道具は本体側の設定がそのまま使われます。");
         ui.separator();
 
         let input_height = 118.0;
@@ -269,7 +276,11 @@ impl ConsoleApp {
                     ui.add_space(6.0);
                 }
                 if self.generating {
-                    ui.label("生成中…");
+                    let secs = self
+                        .chat_started
+                        .map(|t| t.elapsed().as_secs())
+                        .unwrap_or(0);
+                    ui.label(format!("生成中…（{secs}秒）"));
                 }
             });
         ui.separator();
@@ -278,11 +289,19 @@ impl ConsoleApp {
             egui::TextEdit::multiline(&mut self.input)
                 .desired_rows(3)
                 .desired_width(f32::INFINITY)
+                // Tab でフォーカスを手放さない（IME変換中にフォーカスが外れると変換が消えるため）
+                .lock_focus(true)
                 .hint_text("メッセージを入力（Ctrl+Enterで送信）"),
         );
         ui.horizontal(|ui| {
             if matches!(self.status, ServerStatus::Stopped) && self.starting_since.is_none() {
                 ui.label("サーバー停止中は送信できません");
+            }
+            if ui
+                .add_enabled(!self.generating, egui::Button::new("新しい会話"))
+                .clicked()
+            {
+                self.new_conversation();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let can_send =
@@ -364,7 +383,7 @@ impl ConsoleApp {
         }
 
         ui.add_space(8.0);
-        ui.label("追加引数（起動コマンドの末尾に付与。制御ベクトルなど）");
+        ui.label("追加引数（strata launch のオプションとして末尾に付与。通常は空欄で構いません）");
         ui.add(
             egui::TextEdit::multiline(&mut self.settings.extra_args)
                 .desired_rows(5)
@@ -399,6 +418,32 @@ impl ConsoleApp {
 
 impl eframe::App for ConsoleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // IME変換中は Tab キーを egui に渡さない。
+        // MS-IME の予測変換は Tab で候補を選ぶが、egui の TextEdit は Tab を
+        // タブ文字の挿入として先に処理してしまい、変換が確定できないため。
+        // （フォーカス移動は入力欄の lock_focus(true) 側で止めている）
+        {
+            let mut composing = self.ime_composing;
+            ctx.input(|i| {
+                for e in &i.events {
+                    if let egui::Event::Ime(ie) = e {
+                        match ie {
+                            egui::ImeEvent::Preedit(t) => composing = !t.is_empty(),
+                            egui::ImeEvent::Commit(_)
+                            | egui::ImeEvent::Disabled => composing = false,
+                            _ => {}
+                        }
+                    }
+                }
+            });
+            self.ime_composing = composing;
+            if composing {
+                ctx.input_mut(|i| {
+                    i.events
+                        .retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Tab, .. }));
+                });
+            }
+        }
         // ポーリング結果の取り込み
         while let Ok((st, _models)) = self.status_rx.try_recv() {
             if matches!(st, ServerStatus::Running(_)) {
@@ -409,12 +454,16 @@ impl eframe::App for ConsoleApp {
         // チャット結果の取り込み
         if let Some(rx) = &self.chat_rx {
             match rx.try_recv() {
-                Ok(Ok(text)) => {
+                Ok(Ok((text, session))) => {
                     self.messages.push(ChatMsg {
                         role: "assistant".to_string(),
                         content: text,
                     });
+                    if session.is_some() {
+                        self.oc_session = session;
+                    }
                     self.generating = false;
+                    self.chat_started = None;
                     self.chat_rx = None;
                 }
                 Ok(Err(e)) => {
@@ -423,10 +472,12 @@ impl eframe::App for ConsoleApp {
                         content: format!("⚠ エラー: {e}"),
                     });
                     self.generating = false;
+                    self.chat_started = None;
                     self.chat_rx = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.generating = false;
+                    self.chat_started = None;
                     self.chat_rx = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}

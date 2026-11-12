@@ -6,9 +6,9 @@
 
 - **状態表示**: サーバー（`http://127.0.0.1:<port>`）の状態を数秒ごとに確認し、起動中はモデル名を表示
 - **起動 / 終了**: Strata（`%LOCALAPPDATA%\Strata\terminal\current\bin\strata.cmd`）の launch / launch --stop を GUI から実行
-- **チャット**: OpenAI 互換 API（`POST /v1/chat/completions`、非ストリーミング）で対話。システムプロンプトは編集・保存可能
+- **チャット**: 彼女の本体（OpenCode）経由で対話します（v0.2.0〜）。作業フォルダ `D:\strata-work\friend` で `opencode run` を実行するため、憲章・記憶・道具（ファイル操作や画像生成キューなど）がそのまま使えます。「新しい会話」ボタンで文脈をリセットできます。初回の返信は本体側の文脈読み込みのため数分かかることがあります
 - **設定**: family / model / context / vision / parallel / port / 追加引数を編集し、exe と同じフォルダの `settings.json` に保存
-  - 初回起動時は、Strata の起動設定 `%LOCALAPPDATA%\Strata\launch\iq3_xxs-128k.json` の `user_args`（制御ベクトル等）を「追加引数」の初期値として引き継ぎます
+  - 追加引数は通常は空欄にしてください。起動プロファイル側の `user_args`（制御ベクトル等）はエンジン層の引数で、起動時に自動で適用されます。ここへ転記すると起動に失敗します
 
 ## 使い方
 
