@@ -289,6 +289,12 @@ impl ConsoleApp {
             egui::TextEdit::multiline(&mut self.input)
                 .desired_rows(3)
                 .desired_width(f32::INFINITY)
+                // egui の TextEdit 既定は等幅フォントで、日本語フォントとの
+                // 組み合わせで行高が合わず字が縦に潰れて見える。他の表示と
+                // 同じプロポーショナル（Body）を明示する。
+                .font(egui::TextStyle::Body)
+                // 枠と文字が干渉して見切れるため、内側に余白を取る（既定は 4x2 で窮屈）
+                .margin(egui::Margin::symmetric(8.0, 6.0))
                 // Tab でフォーカスを手放さない（IME変換中にフォーカスが外れると変換が消えるため）
                 .lock_focus(true)
                 .hint_text("メッセージを入力"),
