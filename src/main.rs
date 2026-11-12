@@ -100,11 +100,13 @@ fn install_japanese_fonts(ctx: &egui::Context) {
             fonts
                 .font_data
                 .insert("japanese".to_owned(), egui::FontData::from_owned(bytes));
+            // 日本語フォントを先頭に入れる。末尾（フォールバック）にすると
+            // egui 同梱フォント側の字形が優先され、日本語が潰れて見えるため。
             if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                fam.push("japanese".to_owned());
+                fam.insert(0, "japanese".to_owned());
             }
             if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                fam.push("japanese".to_owned());
+                fam.insert(0, "japanese".to_owned());
             }
             ctx.set_fonts(fonts);
             return;
