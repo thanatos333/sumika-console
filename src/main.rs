@@ -144,6 +144,8 @@ struct ConsoleApp {
     chat_started: Option<Instant>,
     /// IME の変換（未確定文字列）が進行中かどうか。変換中は Tab と Enter を egui に渡さない。
     ime_composing: bool,
+    /// 入力欄の内容の高さ（前フレーム実測）。履歴側の確保量を決めるために使う。
+    input_h: f32,
     status: ServerStatus,
     status_rx: mpsc::Receiver<(ServerStatus, Vec<String>)>,
     port_shared: Arc<Mutex<u16>>,
@@ -188,6 +190,7 @@ impl ConsoleApp {
             oc_session: None,
             chat_started: None,
             ime_composing: false,
+            input_h: 76.0,
             status: ServerStatus::Stopped,
             status_rx: rx,
             port_shared,
@@ -251,10 +254,16 @@ impl ConsoleApp {
         ui.label("チャットは彼女の本体（OpenCode）経由です。人格・記憶・道具は本体側の設定がそのまま使われます。");
         ui.separator();
 
-        let input_height = 158.0;
+        // レイアウト配分：入力欄は内容に合わせて下へ伸び（従来どおり）、
+        // ウィンドウ内に収まらなくなったところでスクロールバーに切り替える。
+        // 入力の高さは前フレームの実測（self.input_h）を使い、履歴側の確保量を決める。
         let avail = ui.available_height();
+        let chrome = 52.0; // 区切り線・ボタン行・余白ぶん
+        let history_min = 90.0;
+        let input_max = (avail - history_min - chrome).max(76.0);
+        let input_reserve = self.input_h.clamp(76.0, input_max);
         egui::ScrollArea::vertical()
-            .max_height((avail - input_height).max(80.0))
+            .max_height((avail - input_reserve - chrome).max(40.0))
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 if self.messages.is_empty() {
@@ -287,31 +296,30 @@ impl ConsoleApp {
             });
         ui.separator();
 
-        // 入力欄はスクロール領域で囲み、高さに上限を付ける。
-        // TextEdit は内容に合わせて際限なく縦に伸びるため、そのままだと
-        // 改行を重ねたときウィンドウの外まで広がってしまう。
-        // 上限を超えた分は右端のスクロールバーで上下に移動できる。
+        // 入力欄はスクロール領域で囲む。内容が input_max まではそのまま伸び、
+        // 超えた分は右端のスクロールバーで上下に移動できる。
         let mut input_has_focus = false;
         egui::ScrollArea::vertical()
             .id_salt("chat_input_scroll")
-            .max_height(120.0)
+            .max_height(input_max)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                let resp = ui.add(
-                    egui::TextEdit::multiline(&mut self.input)
-                        .desired_rows(3)
-                        .desired_width(f32::INFINITY)
-                        // egui の TextEdit 既定は等幅フォントで、日本語フォントとの
-                        // 組み合わせで行高が合わず字が縦に潰れて見える。他の表示と
-                        // 同じプロポーショナル（Body）を明示する。
-                        .font(egui::TextStyle::Body)
-                        // 枠と文字が干渉して見切れるため、内側に余白を取る（既定は 4x2 で窮屈）
-                        .margin(egui::Margin::symmetric(8.0, 6.0))
-                        // Tab でフォーカスを手放さない（IME変換中にフォーカスが外れると変換が消えるため）
-                        .lock_focus(true)
-                        .hint_text("メッセージを入力"),
-                );
-                input_has_focus = resp.has_focus();
+                let out = egui::TextEdit::multiline(&mut self.input)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    // egui の TextEdit 既定は等幅フォントで、日本語フォントとの
+                    // 組み合わせで行高が合わず字が縦に潰れて見える。他の表示と
+                    // 同じプロポーショナル（Body）を明示する。
+                    .font(egui::TextStyle::Body)
+                    // 枠と文字が干渉して見切れるため、内側に余白を取る（既定は 4x2 で窮屈）
+                    .margin(egui::Margin::symmetric(8.0, 6.0))
+                    // Tab でフォーカスを手放さない（IME変換中にフォーカスが外れると変換が消えるため）
+                    .lock_focus(true)
+                    .hint_text("メッセージを入力")
+                    .show(ui);
+                input_has_focus = out.response.has_focus();
+                // 内容の高さ（余白込み・最小3行ぶん）を次フレームの配分用に記録する
+                self.input_h = (out.galley.size().y + 14.0).max(76.0);
             });
         ui.horizontal(|ui| {
             if matches!(self.status, ServerStatus::Stopped) && self.starting_since.is_none() {
