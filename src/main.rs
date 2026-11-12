@@ -251,7 +251,7 @@ impl ConsoleApp {
         ui.label("チャットは彼女の本体（OpenCode）経由です。人格・記憶・道具は本体側の設定がそのまま使われます。");
         ui.separator();
 
-        let input_height = 118.0;
+        let input_height = 158.0;
         let avail = ui.available_height();
         egui::ScrollArea::vertical()
             .max_height((avail - input_height).max(80.0))
@@ -287,20 +287,32 @@ impl ConsoleApp {
             });
         ui.separator();
 
-        let input_resp = ui.add(
-            egui::TextEdit::multiline(&mut self.input)
-                .desired_rows(3)
-                .desired_width(f32::INFINITY)
-                // egui の TextEdit 既定は等幅フォントで、日本語フォントとの
-                // 組み合わせで行高が合わず字が縦に潰れて見える。他の表示と
-                // 同じプロポーショナル（Body）を明示する。
-                .font(egui::TextStyle::Body)
-                // 枠と文字が干渉して見切れるため、内側に余白を取る（既定は 4x2 で窮屈）
-                .margin(egui::Margin::symmetric(8.0, 6.0))
-                // Tab でフォーカスを手放さない（IME変換中にフォーカスが外れると変換が消えるため）
-                .lock_focus(true)
-                .hint_text("メッセージを入力"),
-        );
+        // 入力欄はスクロール領域で囲み、高さに上限を付ける。
+        // TextEdit は内容に合わせて際限なく縦に伸びるため、そのままだと
+        // 改行を重ねたときウィンドウの外まで広がってしまう。
+        // 上限を超えた分は右端のスクロールバーで上下に移動できる。
+        let mut input_has_focus = false;
+        egui::ScrollArea::vertical()
+            .id_salt("chat_input_scroll")
+            .max_height(120.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                let resp = ui.add(
+                    egui::TextEdit::multiline(&mut self.input)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        // egui の TextEdit 既定は等幅フォントで、日本語フォントとの
+                        // 組み合わせで行高が合わず字が縦に潰れて見える。他の表示と
+                        // 同じプロポーショナル（Body）を明示する。
+                        .font(egui::TextStyle::Body)
+                        // 枠と文字が干渉して見切れるため、内側に余白を取る（既定は 4x2 で窮屈）
+                        .margin(egui::Margin::symmetric(8.0, 6.0))
+                        // Tab でフォーカスを手放さない（IME変換中にフォーカスが外れると変換が消えるため）
+                        .lock_focus(true)
+                        .hint_text("メッセージを入力"),
+                );
+                input_has_focus = resp.has_focus();
+            });
         ui.horizontal(|ui| {
             if matches!(self.status, ServerStatus::Stopped) && self.starting_since.is_none() {
                 ui.label("サーバー停止中は送信できません");
@@ -321,7 +333,7 @@ impl ConsoleApp {
                 ui.label("Ctrl+Enterで送信");
             });
         });
-        let ctrl_enter = input_resp.has_focus()
+        let ctrl_enter = input_has_focus
             && ui
                 .ctx()
                 .input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.ctrl);
